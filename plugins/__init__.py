@@ -1,63 +1,53 @@
 """
-plugins/__init__.py — Unified plugin loader and registry
+Plugin loader for the bot — designed for easy extension.
 
-This module helps you add, remove, and extend bot behavior by placing
-new modules in plugins/ (without changing bot.py). Plugins can register:
+Design approach:
+- Any .py file placed in this directory automatically becomes a plugin module.
+- Each plugin should export a single setup function named `setup_*handlers(app)`
+  where `app` is the telegram.ext.Application instance.
+- This module scans plugins/ at bot startup, imports them dynamically, and
+  calls their setup function (if present). You can add/remove plugins without
+  modifying bot.py or this file beyond placing the module here.
 
-- Telegram command handlers,
-- Telegram message handlers (filtered text, URLs, media, etc.),
-- Background task management (store and cancel tasks via the shared dict),
-- Utilities for URL detection, cleanup, logging, etc.,
-- Or custom services like admin-only commands, usage analytics, retries, caching…
-
-The entry point is `load_plugins(app, active_tasks)`: call it once after creating
-your `Application` object in bot.py.
+Tip: define small, single-purpose plugins (video, document, help, admin, stats, etc.)
+so you can enable/disable or iterate quickly.
 """
 
+import importlib
+import pkgutil
 import logging
-from typing import Callable, Dict, Any
-from telegram.ext import Application
+from typing import Any
 
-# Allow plugins to easily access configuration and shared utilities
-from config import *  # noqa
-from .common import detect_link_type, find_first_url, LinkType
-
-logger = logging.getLogger("Plugins")
-
-# Typing hint for active tasks registry passed from bot.py
-ActiveTasks = Dict[int, Any]  # user_id -> asyncio.Task
+logger = logging.getLogger(__name__)
 
 
-def load_plugins(app: Application, active_tasks: ActiveTasks) -> None:
+def setup_plugins_handlers(app: Any) -> None:
     """
-    Dynamically load and register plugins by importing their modules.
+    Discover all modules in this package and call their setup_*handlers(app)
+    function if available.
 
-    Each plugin module should expose a `register(app, active_tasks)` function
-    that sets up the command/message handlers it provides. This keeps logic
-    modular and avoids bloating bot.py.
-
-    Note: Plugins that import heavy libraries should place those imports inside
-    their handler methods to reduce startup latency (e.g., Playwright, ffmpeg-python).
+    Parameters:
+    app (telegram.ext.Application): Bot application instance to register handlers with.
     """
-    logger.info("Loading plugins from plugins/…")
+    # Iterate over all plugins in this folder
+    for _, module_name, _ in pkgutil.iter_modules(__path__):
+        try:
+            module = importlib.import_module(f"{__name__}.{module_name}")
+            setup_fn_name = f"setup_{module_name}_handlers"
+            setup_fn = getattr(module, setup_fn_name, None)
 
-    # Import plugin modules by name (explicit listing makes behavior predictable)
-    try:
-        from . import video_handlers as video
-        video.register(app, active_tasks)
-        logger.info("Video plugin registered.")
-    except Exception as e:
-        logger.error("Failed to register video plugin: %s", e, exc_info=True)
-
-    try:
-        from . import doc_handlers as docs
-        docs.register(app, active_tasks)
-        logger.info("Document plugin registered.")
-    except Exception as e:
-        logger.error("Failed to register document plugin: %s", e, exc_info=True)
-
-    # Add future plugins here as needed:
-    # from . import admin, monitoring, analytics, error_handling, ...
-    # admin.register(app, active_tasks)
-
-    logger.info("All plugins loaded.")
+            if setup_fn is not None:
+                setup_fn(app)
+                logger.info(
+                    "Loaded plugin: %s — called %s(app)",
+                    module_name,
+                    setup_fn_name,
+                )
+            else:
+                logger.debug(
+                    "Plugin found: %s — no setup function named %s()",
+                    module_name,
+                    setup_fn_name,
+                )
+        except Exception:
+            logger.exception("Failed to load plugin: %s", module_name)
