@@ -1,0 +1,4 @@
+python-telegram-bot[ext]>=20.7
+playwright>=1.40
+Pillow>=10.0
+img2pdf>=0.5
